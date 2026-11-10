@@ -1,0 +1,440 @@
+﻿openapi: "3.1.0"
+info:
+  title: Tax Assistant API (1C HTTP Services)
+  version: "1.0.0"
+  description: >
+    HTTP-сервисы 1С для AI-ассистента по налоговым вопросам.
+    Предоставляют фактические данные: сальдо ЕНС, начисления, документы, расчёт налога.
+    Все вызовы — только чтение (кроме /calculate, который не пишет в БД).
+    Security: JWT (TM-01, NFR-SEC-006), HTTPS, валидация входа (TM-01).
+    Correlation: W3C traceparent обязателен для сквозной диагностики (OBS-C-02).
+    Rate limiting применяется на уровне Orchestrator (NFR-SEC-005), не в 1С.
+  contact:
+    name: Tax Assistant Team
+  license:
+    name: Internal
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        JWT, выпускаемый Orchestrator. Содержит sub (1С-пользователь),
+        exp, iat, trace_id (для корреляции). Проверяется в 1С HTTP-сервисе.
+  parameters:
+    TraceparentHeader:
+      name: traceparent
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+      description: >
+        W3C Trace Context (OBS-C-02). Обязателен для сквозной диагностики.
+        Если не передан — 1С генерирует новый trace_id.
+      example: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    XRequestIDHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >
+        Опциональный request-id (fallback, если traceparent не пробросился).
+        Используется в async LLM-вызовах.
+      example: "req-abc-123"
+  schemas:
+    TaxType:
+      type: string
+      enum: [nds, profit, usn]
+      description: >
+        НДС (nds), налог на прибыль (profit), УСН (usn).
+        Соответствует справочнику «Налоги» в 1С.
+    Period:
+      type: string
+      pattern: "^\\d{4}-(Q[1-4]|\\d{2})$"
+      example: "2026-Q1"
+      description: >
+        Период в формате YYYY-QN (квартал) или YYYY-MM (месяц).
+        Для НДС и прибыли — квартал; для УСН — год (YYYY).
+    TaxBalance:
+      type: object
+      required: [tax, period, amount, asOfDate, traceId]
+      properties:
+        tax:
+          $ref: "#/components/schemas/TaxType"
+        period:
+          $ref: "#/components/schemas/Period"
+        amount:
+          type: number
+          description: >
+            Положительное — переплата, отрицательное — задолженность.
+            В рублях, с копейками.
+          example: 150000.00
+        asOfDate:
+          type: string
+          format: date
+          description: Дата актуальности данных в 1С
+          example: "2026-03-31"
+        traceId:
+          type: string
+          description: W3C trace-id для корреляции с трейсом (OBS-C-02)
+          example: "4bf92f3577b34da6a3ce929d0e0e4736"
+    TaxCalculationRequest:
+      type: object
+      required: [tax, period, base]
+      properties:
+        tax:
+          $ref: "#/components/schemas/TaxType"
+        period:
+          $ref: "#/components/schemas/Period"
+        base:
+          type: number
+          exclusiveMinimum: 0
+          description: Налоговая база в рублях
+          example: 1000000.00
+    TaxCalculationResponse:
+      type: object
+      required: [tax, rate, amount, article, traceId]
+      properties:
+        tax:
+          $ref: "#/components/schemas/TaxType"
+        rate:
+          type: number
+          description: Ставка налога в процентах
+          example: 20.0
+        amount:
+          type: number
+          description: Сумма налога в рублях
+          example: 200000.00
+        article:
+          type: string
+          description: Ссылка на статью НК РФ (номер + пункт)
+          example: "ст. 164 п. 1 НК РФ"
+        traceId:
+          type: string
+          description: W3C trace-id для корреляции (OBS-C-02)
+          example: "4bf92f3577b34da6a3ce929d0e0e4736"
+    DocumentSearchResponse:
+      type: object
+      required: [documents, traceId]
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentItem"
+        traceId:
+          type: string
+          description: W3C trace-id для корреляции (OBS-C-02)
+          example: "4bf92f3577b34da6a3ce929d0e0e4736"
+    DocumentItem:
+      type: object
+      required: [type, number, date, amount]
+      properties:
+        type:
+          type: string
+          enum: [invoice, declaration, act, payment]
+          description: >
+            Тип документа: счёт-фактура (invoice), декларация (declaration),
+            акт (act), платёжное поручение (payment).
+          example: "declaration"
+        number:
+          type: string
+          example: "NDS-2026-Q1-001"
+        date:
+          type: string
+          format: date
+          example: "2026-04-15"
+        amount:
+          type: number
+          description: Сумма документа в рублях
+          example: 200000.00
+    ErrorResponse:
+      type: object
+      required: [error_code, message, trace_id]
+      properties:
+        error_code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+            - TIMEOUT
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Amount must be positive"
+        details:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          description: Детали валидации по полям
+          example:
+            base: ["must be > 0"]
+        trace_id:
+          type: string
+          description: >
+            W3C trace-id для корреляции с трейсом (OBS-C-02).
+            Обязателен для support-диагностики.
+          example: "4bf92f3577b34da6a3ce929d0e0e4736"
+paths:
+  /api/v1/taxes/balance:
+    get:
+      summary: Получить сальдо ЕНС по налогу
+      description: >
+        Возвращает сальдо ЕНС (переплата/задолженность) по указанному налогу и периоду.
+        Security: JWT (TM-01, NFR-SEC-006). Только чтение.
+        Correlation: traceparent обязателен (OBS-C-02).
+      operationId: get_tax_balance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TraceparentHeader"
+        - $ref: "#/components/parameters/XRequestIDHeader"
+        - name: tax
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/TaxType"
+        - name: period
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Period"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaxBalance"
+              examples:
+                nds_q1_2026:
+                  value:
+                    tax: "nds"
+                    period: "2026-Q1"
+                    amount: 150000.00
+                    asOfDate: "2026-03-31"
+                    traceId: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "400":
+          description: Bad Request (missing/invalid tax or period)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_period:
+                  value:
+                    error_code: "VALIDATION_ERROR"
+                    message: "period must match YYYY-QN or YYYY-MM"
+                    details:
+                      period: ["invalid format"]
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "401":
+          description: Unauthorized (missing/invalid JWT)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missing_jwt:
+                  value:
+                    error_code: "UNAUTHORIZED"
+                    message: "JWT is missing or invalid"
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "403":
+          description: Forbidden (1С-пользователь не имеет прав на этот налог)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Налог или период не найден в 1С
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_found:
+                  value:
+                    error_code: "NOT_FOUND"
+                    message: "Tax or period not found"
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "429":
+          description: Too Many Requests (rate limiting на Orchestrator)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internal:
+                  value:
+                    error_code: "INTERNAL_ERROR"
+                    message: "Unexpected error"
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+  /api/v1/taxes/calculate:
+    post:
+      summary: Рассчитать налог по данным 1С
+      description: >
+        Рассчитывает налог по налоговой базе и периоду. Возвращает сумму и ссылку на статью НК РФ.
+        Не пишет в БД 1С (только чтение ставок и правил).
+        Security: JWT (TM-01). Валидация base > 0 (TM-01).
+        Correlation: traceparent обязателен (OBS-C-02).
+      operationId: calculate_tax
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TraceparentHeader"
+        - $ref: "#/components/parameters/XRequestIDHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaxCalculationRequest"
+            examples:
+              nds_q1_2026:
+                value:
+                  tax: "nds"
+                  period: "2026-Q1"
+                  base: 1000000.00
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaxCalculationResponse"
+              examples:
+                nds_20:
+                  value:
+                    tax: "nds"
+                    rate: 20.0
+                    amount: 200000.00
+                    article: "ст. 164 п. 1 НК РФ"
+                    traceId: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+        "422":
+          description: Validation Error (base <= 0, missing fields)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid_base:
+                  value:
+                    error_code: "VALIDATION_ERROR"
+                    message: "base must be > 0"
+                    details:
+                      base: ["must be > 0"]
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "429":
+          description: Too Many Requests
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/documents/search:
+    get:
+      summary: Найти документы по налогу и периоду
+      description: >
+        Возвращает список документов (счёт-фактуры, декларации, акты, платёжные поручения)
+        по указанному налогу и периоду. Только чтение.
+        Security: JWT (TM-01).
+        Correlation: traceparent обязателен (OBS-C-02).
+      operationId: search_documents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TraceparentHeader"
+        - $ref: "#/components/parameters/XRequestIDHeader"
+        - name: tax
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/TaxType"
+        - name: period
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Period"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentSearchResponse"
+              examples:
+                q1_2026:
+                  value:
+                    documents:
+                      - type: "declaration"
+                        number: "NDS-2026-Q1-001"
+                        date: "2026-04-15"
+                        amount: 200000.00
+                      - type: "invoice"
+                        number: "INV-2026-001"
+                        date: "2026-02-10"
+                        amount: 50000.00
+                    traceId: "4bf92f3577b34da6a3ce929d0e0e4736"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+        "429":
+          description: Too Many Requests
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

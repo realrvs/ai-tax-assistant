@@ -1,0 +1,6 @@
+﻿backup/*
+*.dt
+*.cf
+__pycache__/
+*.pyc
+.env
