@@ -8,10 +8,28 @@ Accepted
 
 ## Решение
 **Redaction processor в otel-collector** — единая точка редактирования PII до экспорта в бэкенды (loki, prometheus, langfuse). Правила:
-- `telegram.chat_id`, `user_id` → hashed (SHA-256) на стороне приложения до отправки в otel-collector.
-- `query`, `prompt`, `response` → редактируются в otel-collector (regex + allowlist полей) перед экспортом в langfuse.
+
+**Hashed ID (на стороне приложения):**
+- `telegram.chat_id`, `user_id` → SHA-256 хеш (T-206).
+
+**Regex-паттерны (в otel-collector):**
+| Тип данных | Regex-паттерн | Пример |
+|---|---|---|
+| ИНН (10 цифр) | `\b\d{10}\b` | 1234567890 |
+| ИНН (12 цифр) | `\b\d{12}\b` | 123456789012 |
+| СНИЛС | `\b\d{3}-\d{3}-\d{2}\s\d{2}\b` | 123-456-789 01 |
+| Паспорт | `\b\d{4}\s\d{6}\b` | 1234 567890 |
+| Телефон | `\+7\s?\d{3}\s?\d{3}-?\d{2}-?\d{2}` | +7 999 123-45-67 |
+| Email | `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}` | user@example.com |
+
+**Allowlist полей для redaction:**
+- `query`, `prompt`, `response`, `text`, `message`, `answer`
+- Все остальные поля экспортируются без изменения.
+
+**Дополнительно:**
 - Все сигналы с `pii: true` (из Observability Contract) проходят через redaction processor.
 - Каждое редактирование логируется как `security.pii.redacted` с `field.name`, `trace_id`.
+- Флаг `ARCHIVE_AUDIT_LOGS` (T-303) — опциональное архивирование аудит-логов перед ротацией.
 
 **Точка redaction:** otel-collector (централизованно) + приложение (hashed ID до отправки). Двойная защита: приложение хеширует ID, otel-collector редактирует текстовые поля.
 
