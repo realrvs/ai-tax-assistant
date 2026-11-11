@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DocumentMovement xmlns="http://v8.1c.ru/8.3/xcf/metadata" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:cnt="http://v8.1c.ru/8.1/data/contest" xmlns:form="http://v8.1c.ru/8.3/xcf/extrnform" xmlns:sec="http://v8.1c.ru/8.1/data/securetype" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsdata="http://xsdata.dev/1.2/schema" xmlns:dt="http://v8.1c.ru/8.1/data/core" xmlns:base="http://v8.1c.ru/XMLData">
+	<Name>TaxAccrualMovement</Name>
+	<Document>Document.TaxAccrual</Document>
+	<Register>AccumulationRegister.TaxBalance</Register>
+	<RegisterRecordKind>Receipt</RegisterRecordKind>
+	<Fields>
+		<Field>
+			<Name>Tax</Name>
+			<Group>1</Group>
+			<DataValueType>CatalogRef:Taxes</DataValueType>
+			<ShortName>Tax</ShortName>
+			<MasterField>Document.Tax</MasterField>
+			<Use>true</Use>
+		</Field>
+		<Field>
+			<Name>Period</Name>
+			<Group>2</Group>
+			<DataValueType>CatalogRef:Periods</DataValueType>
+			<ShortName>Period</ShortName>
+			<MasterField>Document.Period</MasterField>
+			<Use>true</Use>
+		</Field>
+		<Field>
+			<Name>Amount</Name>
+			<Group>3</Group>
+			<DataValueType>Number</DataValueType>
+			<Number>
+				<FirstNumber>0</FirstNumber>
+				<Len>17</Len>
+				<DecimalWidth>2</DecimalWidth>
+				<NegativeProcessed>True</NegativeProcessed>
+			</Number>
+			<ShortName>Amount</ShortName>
+			<MasterField>Document.Amount</MasterField>
+			<Use>true</Use>
+		</Field>
+	</Fields>
+</DocumentMovement>
