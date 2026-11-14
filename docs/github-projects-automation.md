@@ -85,3 +85,47 @@
 - **Идемпотентность**: перед созданием любой сущности (issue, milestone, project) проверь, не существует ли она уже. Не создавай дубликаты.
 - **Прозрачность**: после каждого шага выводи в чат краткий отчёт о выполненном (сколько issues создано, какие IDs получены, какие поля заполнены).
 - **Форматирование**: Используй Markdown для оформления тел issues и таблиц в чате.
+
+## 5. Известные ограничения и исправления (из реального опыта)
+
+### GraphQL мутации для Project V2
+- **Date поле**: принимает строку `YYYY-MM-DD`, а не объект `{year, month, day}`.
+  ```graphql
+  value:{date:"2026-11-16"}
+  ```
+- **Single Select поле**: принимает `singleSelectOptionId` напрямую, а не через вложенный объект.
+  ```graphql
+  value:{singleSelectOptionId:"606e36b4"}
+  ```
+- **Number поле**: принимает `number` напрямую.
+  ```graphql
+  value:{number:5}
+  ```
+- **projectV2Field**: при создании Single Select поля обязательны `singleSelectOptions` с `color` и `description`.
+  ```graphql
+  createProjectV2Field(input:{projectId:$p,name:$n,dataType:SINGLE_SELECT,singleSelectOptions:[{name:"Phase 1",color:"BLUE",description:"T-001...T-010"}]})
+  ```
+
+### GitHub CLI (gh)
+- `gh milestone list` **не поддерживается**. Используй REST API:
+  ```
+  gh api repos/{owner}/{repo}/milestones
+  ```
+- `gh issue edit` **не поддерживает** `--add-blocked-by`/`--add-blocking`.
+- `gh project list` — поддерживается, возвращает Project ID.
+
+### Зависимости (Dependencies)
+- REST API `PATCH /repos/{owner}/{repo}/issues/{num}` с полем `blocked_by` **не работает для закрытых issues**.
+- GraphQL mutation `updateIssue` с полем `blockedBy` **не поддерживается** в текущей версии API.
+- **Рекомендуемый метод**: Markdown-секция `## Dependencies` в теле issue.
+- **Альтернатива**: добавить label `depends-on:T-XXX` через REST API.
+- **UI метод**: вручную через раздел "Blocks" в UI GitHub issue.
+
+### PowerShell
+- Избегай интерполяции строк с `:` в `$()` — используй `${}` для разделения имён переменных.
+- `gh api graphql --input` может не работать с файлами из-за кодировки — используй `Invoke-RestMethod` с `Content-Type: application/json`.
+
+### Node ID vs Issue Number
+- Для `addProjectV2ItemById` нужен **node ID** issue (формат `I_kwDO...`), а не номер.
+- Получить node ID: `gh api repos/{owner}/{repo}/issues?state=all` → поле `node_id`.
+- Для `gh issue view` используется номер (например, `gh issue view 1`).
